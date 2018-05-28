@@ -23,6 +23,8 @@ var repl = require('repl');
 var http = require('http');
 var fs = require('fs');
 var util = require('util');
+const vm = require('vm');
+
 
 var ReplHttpServer = function ReplHttpServer(prompt, stream, replServer, options) {
     this.running = false;
@@ -47,25 +49,9 @@ ReplHttpServer.prototype.start = function(port) {
     var self = this;
     if (this.username !== undefined && this.password !== undefined) {
         // Set up server that requires http digest authentication
-        var configuredUsername = this.username;
-        var configuredPassword = this.password;
-        var auth = require('http-auth');
-        var crypto = require('crypto');
-        
-        var digest = auth.digest({ realm: "webrepl" }, 
-            function (username, callback) { // Expecting md5(username:realm:password) in callback.		
-                if (username === configuredUsername) {
-                    var md5hash = crypto.createHash('md5');
-                    callback(md5hash.update(configuredUsername + ":webrepl:" + configuredPassword).digest("hex"));
-                } else {
-                    callback();			
-                }
-            }
-        );
-        
-        self.server = http.createServer(digest, function(req, res) {
-            self.route(req, res);
-        });
+        var httpdigest = require('./http-digest');
+        self.server = httpdigest.createServer(this.username, this.password, 
+            function(req, res) { self.route(req, res); });
         self.server.listen(port, this.hostname);
     } else {
         // No auth required
@@ -203,6 +189,20 @@ ReplHttpServer.prototype.serveFile = function(file, response) {
     });
 };
 
+function myEval(cmd, context, filename, callback) {
+    result = null;
+    try {
+        var script = vm.createScript(cmd, {
+          filename: filename,
+          displayErrors: false,
+        });
+	result = script.runInContext(context);
+    } catch (e) {
+        return callback(null, e);
+    }
+    callback(null, result);
+}
+
 /**
  * Starts a repl served via a web console.
  * @param {Integer} port Port to serve web console
@@ -212,7 +212,8 @@ ReplHttpServer.prototype.serveFile = function(file, response) {
 var start = function(port, options) {
     var stream = new SimpleStream();
     var prompt = 'node> ';
-    var rs = new repl.REPLServer(prompt, stream);
+    var rs = new repl.REPLServer({ prompt: prompt,
+			stream : stream, eval : myEval } );
     var replHttpServer = new ReplHttpServer(prompt, stream, rs, options);
     replHttpServer.start(port);
     return rs;
